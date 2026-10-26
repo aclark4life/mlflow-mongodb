@@ -67,6 +67,28 @@ def test_search_experiment_attribute_and_tag_filters(
     }
 
 
+@pytest.mark.parametrize(
+    ("comparator", "expected_names"),
+    [
+        ("=", {"RiskA"}),
+        ("!=", {"Default", "RiskB", "Other"}),
+    ],
+)
+def test_search_experiment_id_filters(
+    store: MongoDBTrackingStore, search_experiments, comparator, expected_names
+):
+    experiment_id = search_experiments["RiskA"]
+
+    results = store.search_experiments(
+        filter_string=f"experiment_id {comparator} '{experiment_id}'"
+    )
+
+    assert {experiment.name for experiment in results} == expected_names
+    assert {experiment.experiment_id for experiment in results} == {
+        search_experiments[name] for name in expected_names
+    }
+
+
 @pytest.fixture
 def tag_existence_experiments(store: MongoDBTrackingStore):
     experiment_ids = {
