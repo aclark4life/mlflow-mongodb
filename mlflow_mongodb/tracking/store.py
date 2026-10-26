@@ -46,6 +46,7 @@ from mlflow_mongodb.infrastructure.settings import MongoDBSettings
 from mlflow_mongodb.infrastructure.store_errors import handle_persistence_error
 from mlflow_mongodb.tracking.repositories import ExperimentRepository
 from mlflow_mongodb.tracking.repositories.experiments import ExperimentFilter, ExperimentOrder
+from mlflow_mongodb.tracking.types import ExperimentRecord
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,19 @@ class MongoDBTrackingStore(AbstractStore):
         )
         return repository
 
+    @staticmethod
+    def _to_mlflow_experiment(record: ExperimentRecord) -> Experiment:
+        """Convert an experiment record into an MLflow experiment."""
+        return Experiment(
+            experiment_id=record.experiment_id,
+            name=record.name,
+            artifact_location=record.artifact_location,
+            lifecycle_stage=record.lifecycle_stage,
+            tags=[ExperimentTag(tag.key, tag.value) for tag in record.tags],
+            creation_time=record.creation_time,
+            last_update_time=record.last_update_time,
+        )
+
     @handle_persistence_error("A database operation failed.", logger=logger)
     def search_experiments(
         self,
@@ -137,18 +151,7 @@ class MongoDBTrackingStore(AbstractStore):
         if len(records) > max_results:
             records = records[:max_results]
             next_page_token = SearchUtils.create_page_token(offset + max_results)
-        experiments = [
-            Experiment(
-                experiment_id=record.experiment_id,
-                name=record.name,
-                artifact_location=record.artifact_location,
-                lifecycle_stage=record.lifecycle_stage,
-                tags=[ExperimentTag(tag.key, tag.value) for tag in record.tags],
-                creation_time=record.creation_time,
-                last_update_time=record.last_update_time,
-            )
-            for record in records
-        ]
+        experiments = [self._to_mlflow_experiment(record) for record in records]
         return PagedList(experiments, next_page_token)
 
     @cached_property
@@ -263,15 +266,7 @@ class MongoDBTrackingStore(AbstractStore):
                 f"No Experiment with id={experiment_id} exists", RESOURCE_DOES_NOT_EXIST
             )
 
-        return Experiment(
-            experiment_id=record.experiment_id,
-            name=record.name,
-            artifact_location=record.artifact_location,
-            lifecycle_stage=record.lifecycle_stage,
-            tags=[ExperimentTag(tag.key, tag.value) for tag in record.tags],
-            creation_time=record.creation_time,
-            last_update_time=record.last_update_time,
-        )
+        return self._to_mlflow_experiment(record)
 
     @handle_persistence_error("Unable to get experiment by name.", logger=logger)
     def get_experiment_by_name(self, experiment_name: str) -> Experiment | None:
@@ -279,15 +274,7 @@ class MongoDBTrackingStore(AbstractStore):
         if record is None:
             return None
 
-        return Experiment(
-            experiment_id=record.experiment_id,
-            name=record.name,
-            artifact_location=record.artifact_location,
-            lifecycle_stage=record.lifecycle_stage,
-            tags=[ExperimentTag(tag.key, tag.value) for tag in record.tags],
-            creation_time=record.creation_time,
-            last_update_time=record.last_update_time,
-        )
+        return self._to_mlflow_experiment(record)
 
     @handle_persistence_error("Unable to delete experiment.", logger=logger)
     def delete_experiment(self, experiment_id: str) -> None:
