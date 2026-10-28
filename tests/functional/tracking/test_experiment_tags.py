@@ -18,7 +18,7 @@ from mlflow_mongodb.tracking.store import MongoDBTrackingStore
 
 def _stored_experiment(store: MongoDBTrackingStore, experiment_id: str):
     return store._database[store._settings.experiments_collection_name].find_one(
-        {"_id": experiment_id}
+        {"_id": int(experiment_id)}
     )
 
 

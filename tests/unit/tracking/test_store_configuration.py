@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock, Mock, call
 
 import pytest
 from mlflow.exceptions import MlflowException
@@ -78,6 +78,7 @@ def test_database_is_lazy_and_cached():
 
 def test_store_uses_configured_experiment_collection(monkeypatch):
     monkeypatch.setenv("MLFLOW_MONGODB_EXPERIMENTS_COLLECTION", "custom_experiments")
+    monkeypatch.setenv("MLFLOW_MONGODB_EXPERIMENT_ID_COUNTERS_COLLECTION", "custom_counters")
     database = MagicMock()
     collection = MagicMock()
     database.__getitem__.return_value = collection
@@ -87,13 +88,21 @@ def test_store_uses_configured_experiment_collection(monkeypatch):
     repository = store._experiment_repository
 
     assert repository._collection is collection
+    assert repository._counter_collection is collection
     assert store._experiment_repository is repository
-    database.__getitem__.assert_called_once_with("custom_experiments")
+    database.__getitem__.assert_has_calls([call("custom_experiments"), call("custom_counters")])
     assert collection.create_index.call_count == 2
 
 
-def test_store_rejects_invalid_configured_experiment_collection(monkeypatch):
-    monkeypatch.setenv("MLFLOW_MONGODB_EXPERIMENTS_COLLECTION", "invalid$name")
+@pytest.mark.parametrize(
+    "environment_variable",
+    [
+        "MLFLOW_MONGODB_EXPERIMENTS_COLLECTION",
+        "MLFLOW_MONGODB_EXPERIMENT_ID_COUNTERS_COLLECTION",
+    ],
+)
+def test_store_rejects_invalid_configured_experiment_collection(monkeypatch, environment_variable):
+    monkeypatch.setenv(environment_variable, "invalid$name")
 
     with pytest.raises(ValueError, match="Invalid MongoDB collection name"):
         MongoDBTrackingStore("mongodb://localhost:27017/mlflow")

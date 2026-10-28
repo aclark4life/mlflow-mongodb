@@ -47,7 +47,7 @@ def test_create_and_get_experiment_preserves_metadata(
         assert experiment.tags == {"team": "risk", "purpose": "evaluation"}
 
     document = store._database[store._settings.experiments_collection_name].find_one(
-        {"_id": experiment_id}
+        {"_id": int(experiment_id)}
     )
     assert document["tags"] == [
         {"k": "team", "v": "risk"},

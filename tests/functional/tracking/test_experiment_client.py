@@ -47,7 +47,7 @@ def test_experiment_tag_lifecycle_through_mlflow_client(store: MongoDBTrackingSt
     client.set_experiment_tag(experiment_id, "team.name", "old")
 
     assert client.get_experiment(experiment_id).tags == {"keep": "yes", "team.name": "old"}
-    assert collection.find_one({"_id": experiment_id})["tags"] == [
+    assert collection.find_one({"_id": int(experiment_id)})["tags"] == [
         {"k": "keep", "v": "yes"},
         {"k": "team.name", "v": "old"},
     ]
@@ -55,7 +55,7 @@ def test_experiment_tag_lifecycle_through_mlflow_client(store: MongoDBTrackingSt
     client.set_experiment_tag(experiment_id, "team.name", "$new")
 
     assert client.get_experiment(experiment_id).tags == {"keep": "yes", "team.name": "$new"}
-    assert collection.find_one({"_id": experiment_id})["tags"] == [
+    assert collection.find_one({"_id": int(experiment_id)})["tags"] == [
         {"k": "keep", "v": "yes"},
         {"k": "team.name", "v": "$new"},
     ]
@@ -68,5 +68,5 @@ def test_experiment_tag_lifecycle_through_mlflow_client(store: MongoDBTrackingSt
     client.delete_experiment_tag(experiment_id, "team.name")
 
     assert client.get_experiment(experiment_id).tags == {"keep": "yes"}
-    assert collection.find_one({"_id": experiment_id})["tags"] == [{"k": "keep", "v": "yes"}]
+    assert collection.find_one({"_id": int(experiment_id)})["tags"] == [{"k": "keep", "v": "yes"}]
     assert client.search_experiments(filter_string="tags.`team.name` = '$new'") == []

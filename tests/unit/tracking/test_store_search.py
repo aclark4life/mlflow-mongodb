@@ -24,6 +24,16 @@ from mlflow_mongodb.tracking.repositories.experiments import ExperimentFilter, E
         ("tags.team ILIKE 'Plat%'", ExperimentFilter("tag", "team", "ILIKE", "Plat%")),
         ("creation_time >= 1000", ExperimentFilter("attribute", "creation_time", ">=", 1000.0)),
         ("last_update_time < 2000", ExperimentFilter("attribute", "last_update_time", "<", 2000.0)),
+        ("experiment_id = '0'", ExperimentFilter("attribute", "experiment_id", "=", 0)),
+        ("experiment_id = '42'", ExperimentFilter("attribute", "experiment_id", "=", 42)),
+        (
+            "experiment_id IN ('42', '43')",
+            ExperimentFilter("attribute", "experiment_id", "IN", (42, 43)),
+        ),
+        (
+            "experiment_id NOT IN ('42', '43')",
+            ExperimentFilter("attribute", "experiment_id", "NOT IN", (42, 43)),
+        ),
         ("tags.`team.name` = 'risk'", ExperimentFilter("tag", "team.name", "=", "risk")),
     ],
 )
@@ -65,6 +75,13 @@ def test_parse_empty_experiment_filters(store, filter_string):
         "name > 'risk'",
         "tags.team > 'risk'",
         "creation_time LIKE '1000'",
+        "experiment_id LIKE '4%'",
+        "experiment_id ILIKE '4%'",
+        "experiment_id = 'not-a-number'",
+        "experiment_id IN ('42', 'not-a-number')",
+        "experiment_id = '-1'",
+        "experiment_id IN ('42', '-1')",
+        "experiment_id NOT IN ('-1')",
         "unknown = 'risk'",
         "name = unquoted",
     ],
@@ -235,7 +252,7 @@ def test_search_passes_criteria_and_returns_paged_entities(
 ):
     records = [
         experiment_record_factory(
-            experiment_id=str(index),
+            experiment_id=index,
             name=f"risk-{index}",
             lifecycle_stage=lifecycle_stages[0],
             tags={"team": "risk"},

@@ -31,7 +31,7 @@ class ExperimentFilter:
     field_type: Literal["attribute", "tag"]
     key: str
     comparator: str
-    value: str | float | tuple[str, ...] | None
+    value: str | int | float | tuple[str | int, ...] | None
 
 
 @dataclass(frozen=True)
@@ -51,6 +51,9 @@ class ExperimentRepository:
         self._settings = settings or MongoDBSettings()
         with repository_operation("Unable to initialize repository."):
             self._collection = database[self._settings.experiments_collection_name]
+            self._counter_collection = database[
+                self._settings.experiment_id_counters_collection_name
+            ]
             self._collection.create_index(
                 [("name", ASCENDING)], unique=True, name=self.UNIQUE_NAME_INDEX
             )
@@ -58,13 +61,18 @@ class ExperimentRepository:
                 [("lifecycle_stage", ASCENDING), ("creation_time", DESCENDING), ("_id", ASCENDING)],
                 name="experiments_lifecycle_creation_id",
             )
+            self._counter_collection.update_one(
+                {"_id": self._settings.experiments_collection_name},
+                {"$setOnInsert": {"value": 0}},
+                upsert=True,
+            )
 
     def ensure_default_experiment(self, *, artifact_location: str, creation_timestamp: int) -> None:
         """Create experiment 0 once, preserving existing metadata and lifecycle state."""
         with repository_operation("Unable to initialize default experiment."):
             try:
                 self._collection.update_one(
-                    {"_id": DEFAULT_EXPERIMENT_ID},
+                    {"_id": int(DEFAULT_EXPERIMENT_ID)},
                     {
                         "$setOnInsert": {
                             "name": Experiment.DEFAULT_EXPERIMENT_NAME,
@@ -80,8 +88,23 @@ class ExperimentRepository:
             except DuplicateKeyError:
                 # Another store may have inserted experiment 0 concurrently. A name
                 # collision with a different ID is still an initialization failure.
-                if self._collection.find_one({"_id": DEFAULT_EXPERIMENT_ID}) is None:
+                if self._collection.find_one({"_id": int(DEFAULT_EXPERIMENT_ID)}) is None:
                     raise
+
+    def allocate_experiment_id(self) -> int:
+        """Allocate the next numeric experiment ID atomically."""
+        with repository_operation("Unable to allocate experiment ID."):
+            counter = self._counter_collection.find_one_and_update(
+                {"_id": self._settings.experiments_collection_name},
+                {"$inc": {"value": 1}},
+                return_document=ReturnDocument.AFTER,
+            )
+        if counter is None:
+            raise RepositoryPersistenceError("Unable to allocate experiment ID.")
+        experiment_id = counter["value"]
+        if experiment_id >= 2**63 - 1:
+            raise RepositoryPersistenceError("Unable to allocate experiment ID.")
+        return experiment_id
 
     def search(
         self,
@@ -132,7 +155,7 @@ class ExperimentRepository:
         return [ExperimentRecord.from_document(document) for document in documents]
 
     @staticmethod
-    def _value_condition(comparator: str, value: str | float | tuple[str, ...]):
+    def _value_condition(comparator: str, value: str | int | float | tuple[str | int, ...]):
         if comparator not in ("=", "!=", ">", ">=", "<", "<=", "LIKE", "ILIKE", "IN", "NOT IN"):
             raise ValueError(f"Unsupported experiment comparator: {comparator}")
 
@@ -141,7 +164,7 @@ class ExperimentRepository:
     def create(
         self,
         *,
-        experiment_id: str,
+        experiment_id: int,
         name: str,
         artifact_location: str,
         lifecycle_stage: str,
@@ -166,9 +189,9 @@ class ExperimentRepository:
                 if exc.details and exc.details.get("keyPattern") == {"_id": 1}:
                     raise RepositoryPersistenceError("Unable to create experiment.") from exc
                 raise RepositoryAlreadyExistsError(name) from exc
-        return experiment_id
+        return str(experiment_id)
 
-    def find_by_id(self, experiment_id: str) -> ExperimentRecord | None:
+    def find_by_id(self, experiment_id: int) -> ExperimentRecord | None:
         with repository_operation("Unable to get experiment."):
             document = self._collection.find_one({"_id": experiment_id})
         return ExperimentRecord.from_document(document) if document is not None else None
@@ -178,7 +201,7 @@ class ExperimentRepository:
             document = self._collection.find_one({"name": name})
         return ExperimentRecord.from_document(document) if document is not None else None
 
-    def set_tag(self, *, experiment_id: str | None, key: str, value: str) -> None:
+    def set_tag(self, *, experiment_id: int, key: str, value: str) -> None:
         """Set or replace a tag atomically when the experiment is active."""
         tags = build_merge_array_expression("$tags", [{"k": key, "v": value}], "k")
         with repository_operation("Unable to set experiment tag."):
@@ -202,7 +225,7 @@ class ExperimentRepository:
             )
         self._check_tag_target(document, experiment_id)
 
-    def delete_tag(self, *, experiment_id: str | None, key: str) -> None:
+    def delete_tag(self, *, experiment_id: int, key: str) -> None:
         """Delete an existing tag atomically when the experiment is active."""
         with repository_operation("Unable to delete experiment tag."):
             document = self._collection.find_one_and_update(
@@ -234,7 +257,7 @@ class ExperimentRepository:
             raise RepositoryTagNotFoundError(key)
 
     @staticmethod
-    def _check_tag_target(document: Mapping | None, experiment_id: str | None) -> None:
+    def _check_tag_target(document: Mapping | None, experiment_id: int) -> None:
         if document is None:
             raise RepositoryNotFoundError(experiment_id)
         if document["lifecycle_stage"] != LifecycleStage.ACTIVE:
@@ -243,7 +266,7 @@ class ExperimentRepository:
     def rename(
         self,
         *,
-        experiment_id: str | None,
+        experiment_id: int,
         new_name: str,
         last_update_time: int,
     ) -> ExperimentRecord:
@@ -251,7 +274,10 @@ class ExperimentRepository:
         with repository_operation("Unable to rename experiment."):
             try:
                 document = self._collection.find_one_and_update(
-                    {"_id": experiment_id, "lifecycle_stage": LifecycleStage.ACTIVE},
+                    {
+                        "_id": experiment_id,
+                        "lifecycle_stage": LifecycleStage.ACTIVE,
+                    },
                     {"$set": {"name": new_name, "last_update_time": last_update_time}},
                     return_document=ReturnDocument.AFTER,
                 )
@@ -266,7 +292,7 @@ class ExperimentRepository:
     def mark_deleted(
         self,
         *,
-        experiment_id: str | None,
+        experiment_id: int,
         last_update_time: int,
     ) -> ExperimentRecord:
         return self._transition_lifecycle(
@@ -279,7 +305,7 @@ class ExperimentRepository:
     def restore(
         self,
         *,
-        experiment_id: str | None,
+        experiment_id: int,
         last_update_time: int,
     ) -> ExperimentRecord:
         return self._transition_lifecycle(
@@ -292,7 +318,7 @@ class ExperimentRepository:
     def _transition_lifecycle(
         self,
         *,
-        experiment_id: str | None,
+        experiment_id: int,
         current_stage: str,
         next_stage: str,
         updates: dict[str, object],

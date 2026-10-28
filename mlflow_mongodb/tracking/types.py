@@ -17,7 +17,7 @@ class ExperimentTagRecord:
 class ExperimentRecord:
     """Typed representation of an experiment document."""
 
-    experiment_id: str
+    experiment_id: int
     name: str
     artifact_location: str
     lifecycle_stage: str

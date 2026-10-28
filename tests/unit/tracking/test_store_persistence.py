@@ -28,6 +28,20 @@ def test_create_experiment_sanitizes_and_logs_persistence_failure(
     assert records[0].args == (persistence_error,)
 
 
+def test_id_allocation_failure_prevents_experiment_insert(store, experiment_repository):
+    experiment_repository.allocate_experiment_id.side_effect = RepositoryPersistenceError(
+        "Private counter details"
+    )
+
+    with pytest.raises(MlflowException) as caught:
+        store.create_experiment("example-experiment")
+
+    assert caught.value.message == "Unable to create experiment."
+    assert caught.value.error_code == ErrorCode.Name(INTERNAL_ERROR)
+    assert caught.value.__cause__ is None
+    experiment_repository.create.assert_not_called()
+
+
 def test_repository_initialization_failure_is_logged_once(monkeypatch, caplog):
     persistence_error = RepositoryPersistenceError("Private initialization details")
     initialize = Mock(side_effect=persistence_error)

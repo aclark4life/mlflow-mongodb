@@ -18,6 +18,7 @@ SERVER_SELECTION_TIMEOUT_MS = 3_000
 
 def _clear_application_collections(store: MongoDBTrackingStore) -> None:
     store._database[store._settings.experiments_collection_name].delete_many({})
+    store._database[store._settings.experiment_id_counters_collection_name].delete_many({})
 
 
 @pytest.fixture(scope="session")

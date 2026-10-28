@@ -104,11 +104,11 @@ def tag_existence_experiments(store: MongoDBTrackingStore):
     }
     collection = store._database[store._settings.experiments_collection_name]
     missing_tags = collection.update_one(
-        {"_id": experiment_ids["missing-tags"]}, {"$unset": {"tags": ""}}
+        {"_id": int(experiment_ids["missing-tags"])}, {"$unset": {"tags": ""}}
     )
     assert missing_tags.modified_count == 1
     null_value = collection.update_one(
-        {"_id": experiment_ids["null-value"]}, {"$set": {"tags": [{"k": "team", "v": None}]}}
+        {"_id": int(experiment_ids["null-value"])}, {"$set": {"tags": [{"k": "team", "v": None}]}}
     )
     assert null_value.modified_count == 1
     experiment_ids["Default"] = "0"
@@ -135,7 +135,7 @@ def test_repository_search_tag_existence_filters(
 
     assert {record.name for record in records} == expected_names
     assert {record.experiment_id for record in records} == {
-        tag_existence_experiments[name] for name in expected_names
+        int(tag_existence_experiments[name]) for name in expected_names
     }
 
 
@@ -200,8 +200,8 @@ def test_search_experiments_paginates_timestamp_ties_without_duplicates(
     store: MongoDBTrackingStore, clock, page_size
 ):
     clock["now"] = 1000
-    experiment_ids = [store.create_experiment(f"experiment-{index}") for index in range(7)]
-    expected_ids = [*sorted(experiment_ids), "0"]
+    experiment_ids = [store.create_experiment(f"experiment-{index}") for index in range(12)]
+    expected_ids = [*sorted(experiment_ids, key=int), "0"]
     returned_ids = []
     token = None
 

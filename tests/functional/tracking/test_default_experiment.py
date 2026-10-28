@@ -45,13 +45,13 @@ def test_reopening_preserves_modified_and_deleted_default_experiment(store, cloc
     store.set_experiment_tag("0", ExperimentTag("team", "risk"))
     store.delete_experiment("0")
     collection = store._database[store._settings.experiments_collection_name]
-    before = collection.find_one({"_id": "0"})
+    before = collection.find_one({"_id": 0})
     clock["now"] += 1000
 
     experiment = _reopen(store, "s3://different-artifacts").get_experiment("0")
 
     assert experiment.lifecycle_stage == LifecycleStage.DELETED
-    assert collection.find_one({"_id": "0"}) == before
+    assert collection.find_one({"_id": 0}) == before
 
 
 def test_concurrent_stores_initialize_one_default_experiment(store):
@@ -78,13 +78,13 @@ def test_default_experiment_name_is_reserved_by_existing_record(store):
 
 def test_default_initialization_reports_conflicting_legacy_name(store):
     collection = store._database[store._settings.experiments_collection_name]
-    document = collection.find_one({"_id": "0"})
+    document = collection.find_one({"_id": 0})
     collection.delete_many({})
-    document["_id"] = "42"
+    document["_id"] = 42
     collection.insert_one(document)
 
     with pytest.raises(MlflowException, match="Unable to initialize experiment repository"):
         _reopen(store).get_experiment("0")
 
-    assert collection.find_one({"_id": "0"}) is None
-    assert collection.find_one({"_id": "42"}) == document
+    assert collection.find_one({"_id": 0}) is None
+    assert collection.find_one({"_id": 42}) == document

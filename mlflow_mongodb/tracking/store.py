@@ -2,7 +2,6 @@
 
 import logging
 from functools import cached_property
-from uuid import uuid4
 
 from mlflow.entities import Experiment, ExperimentTag, LifecycleStage, ViewType
 from mlflow.exceptions import MlflowException
@@ -89,10 +88,7 @@ class MongoDBTrackingStore(AbstractStore):
     @handle_persistence_error("Unable to initialize experiment repository.", logger=logger)
     def _experiment_repository(self) -> ExperimentRepository:
         repository = ExperimentRepository(self._database, settings=self._settings)
-        artifact_location = resolve_uri_if_local(
-            append_to_uri_path(self.artifact_uri or "./mlruns", DEFAULT_EXPERIMENT_ID)
-        )
-        _validate_experiment_artifact_location_length(artifact_location)
+        artifact_location = self._resolve_artifact_location(int(DEFAULT_EXPERIMENT_ID))
         repository.ensure_default_experiment(
             artifact_location=artifact_location,
             creation_timestamp=get_current_time_millis(),
@@ -103,7 +99,7 @@ class MongoDBTrackingStore(AbstractStore):
     def _to_mlflow_experiment(record: ExperimentRecord) -> Experiment:
         """Convert an experiment record into an MLflow experiment."""
         return Experiment(
-            experiment_id=record.experiment_id,
+            experiment_id=str(record.experiment_id),
             name=record.name,
             artifact_location=record.artifact_location,
             lifecycle_stage=record.lifecycle_stage,
@@ -111,6 +107,16 @@ class MongoDBTrackingStore(AbstractStore):
             creation_time=record.creation_time,
             last_update_time=record.last_update_time,
         )
+
+    def _resolve_artifact_location(
+        self, experiment_id: int, artifact_location: str | None = None
+    ) -> str:
+        location = artifact_location or append_to_uri_path(
+            self.artifact_uri or "./mlruns", str(experiment_id)
+        )
+        location = resolve_uri_if_local(location)
+        _validate_experiment_artifact_location_length(location)
+        return location
 
     @handle_persistence_error("A database operation failed.", logger=logger)
     def search_experiments(
@@ -164,8 +170,11 @@ class MongoDBTrackingStore(AbstractStore):
                 "tag": SearchExperimentsUtils.VALID_TAG_COMPARATORS,
             },
             field_comparators={
-                ("attribute", key): SearchExperimentsUtils.VALID_NUMERIC_ATTRIBUTE_COMPARATORS
-                for key in SearchExperimentsUtils.NUMERIC_ATTRIBUTES
+                ("attribute", "experiment_id"): ("=", "!=", "IN", "NOT IN"),
+                **{
+                    ("attribute", key): SearchExperimentsUtils.VALID_NUMERIC_ATTRIBUTE_COMPARATORS
+                    for key in SearchExperimentsUtils.NUMERIC_ATTRIBUTES
+                },
             },
         )
 
@@ -199,10 +208,42 @@ class MongoDBTrackingStore(AbstractStore):
             ):
                 # MLflow returns numeric tokens as text; BSON comparisons need numbers.
                 value = float(value)
+            elif clause.field_type == "attribute" and clause.key == "experiment_id":
+                try:
+                    value = (
+                        tuple(int(item) for item in value)
+                        if isinstance(value, tuple)
+                        else int(value)
+                    )
+                    values = value if isinstance(value, tuple) else (value,)
+                    if any(experiment_id < 0 for experiment_id in values):
+                        raise MlflowException.invalid_parameter_value(
+                            "Experiment IDs must be non-negative integers."
+                        )
+                except (TypeError, ValueError, OverflowError) as exc:
+                    logger.error("Unable to parse experiment ID filter: %s", exc)
+                    raise MlflowException.invalid_parameter_value(
+                        "Experiment ID must be a valid integer."
+                    ) from None
             filters.append(
                 ExperimentFilter(clause.field_type, clause.key, clause.comparator, value)
             )
         return tuple(filters)
+
+    @staticmethod
+    def _parse_experiment_id(experiment_id: str | int | None) -> int:
+        try:
+            parsed_experiment_id = int(experiment_id)
+        except (TypeError, ValueError, OverflowError) as exc:
+            logger.error("Unable to parse experiment ID: %s", exc)
+            raise MlflowException(
+                f"No Experiment with id={experiment_id} exists", RESOURCE_DOES_NOT_EXIST
+            ) from None
+        if parsed_experiment_id < 0:
+            raise MlflowException.invalid_parameter_value(
+                "Experiment IDs must be non-negative integers."
+            )
+        return parsed_experiment_id
 
     @staticmethod
     def _parse_experiment_order(order_by: list[str] | None) -> tuple[ExperimentOrder, ...]:
@@ -234,13 +275,9 @@ class MongoDBTrackingStore(AbstractStore):
             _validate_experiment_tag(tag.key, tag.value)
             tags_by_key[tag.key] = tag.value
 
-        # Decimal UUIDs preserve numeric experiment IDs used by prompt filters,
-        # without requiring a shared counter; "0" belongs to the default experiment.
-        experiment_id = str(uuid4().int)
-        artifact_location = resolve_uri_if_local(
-            artifact_location or append_to_uri_path(self.artifact_uri or "./mlruns", experiment_id)
-        )
-        _validate_experiment_artifact_location_length(artifact_location)
+        experiment_id = self._experiment_repository.allocate_experiment_id()
+        artifact_location = self._resolve_artifact_location(experiment_id, artifact_location)
+
         try:
             return self._experiment_repository.create(
                 experiment_id=experiment_id,
@@ -258,7 +295,7 @@ class MongoDBTrackingStore(AbstractStore):
 
     @handle_persistence_error("Unable to get experiment.", logger=logger)
     def get_experiment(self, experiment_id: str | None) -> Experiment:
-        experiment_id = None if experiment_id is None else str(experiment_id)
+        experiment_id = self._parse_experiment_id(experiment_id)
 
         record = self._experiment_repository.find_by_id(experiment_id)
         if record is None:
@@ -278,7 +315,7 @@ class MongoDBTrackingStore(AbstractStore):
 
     @handle_persistence_error("Unable to delete experiment.", logger=logger)
     def delete_experiment(self, experiment_id: str) -> None:
-        experiment_id = None if experiment_id is None else str(experiment_id)
+        experiment_id = self._parse_experiment_id(experiment_id)
         try:
             self._experiment_repository.mark_deleted(
                 experiment_id=experiment_id,
@@ -292,7 +329,7 @@ class MongoDBTrackingStore(AbstractStore):
 
     @handle_persistence_error("Unable to restore experiment.", logger=logger)
     def restore_experiment(self, experiment_id: str) -> None:
-        experiment_id = None if experiment_id is None else str(experiment_id)
+        experiment_id = self._parse_experiment_id(experiment_id)
         try:
             self._experiment_repository.restore(
                 experiment_id=experiment_id,
@@ -307,7 +344,7 @@ class MongoDBTrackingStore(AbstractStore):
     @handle_persistence_error("Unable to rename experiment.", logger=logger)
     def rename_experiment(self, experiment_id: str, new_name: str) -> None:
         _validate_experiment_name(new_name)
-        experiment_id = None if experiment_id is None else str(experiment_id)
+        experiment_id = self._parse_experiment_id(experiment_id)
         try:
             self._experiment_repository.rename(
                 experiment_id=experiment_id,
@@ -331,7 +368,7 @@ class MongoDBTrackingStore(AbstractStore):
     @handle_persistence_error("Unable to set experiment tag.", logger=logger)
     def set_experiment_tag(self, experiment_id: str, tag: ExperimentTag) -> None:
         _validate_experiment_tag(tag.key, tag.value)
-        experiment_id = None if experiment_id is None else str(experiment_id)
+        experiment_id = self._parse_experiment_id(experiment_id)
         try:
             self._experiment_repository.set_tag(
                 experiment_id=experiment_id, key=tag.key, value=tag.value
@@ -351,7 +388,7 @@ class MongoDBTrackingStore(AbstractStore):
 
     @handle_persistence_error("Unable to delete experiment tag.", logger=logger)
     def delete_experiment_tag(self, experiment_id: str, key: str) -> None:
-        experiment_id = None if experiment_id is None else str(experiment_id)
+        experiment_id = self._parse_experiment_id(experiment_id)
         try:
             self._experiment_repository.delete_tag(experiment_id=experiment_id, key=key)
         except RepositoryNotFoundError as exc:

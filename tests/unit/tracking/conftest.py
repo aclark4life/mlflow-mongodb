@@ -1,6 +1,5 @@
 from collections.abc import Mapping
 from unittest.mock import create_autospec
-from uuid import UUID
 
 import pytest
 from mlflow.entities import LifecycleStage
@@ -25,7 +24,7 @@ def store(monkeypatch, experiment_repository):
         "mlflow_mongodb.tracking.store.get_current_time_millis",
         lambda: FIXED_TIMESTAMP,
     )
-    monkeypatch.setattr("mlflow_mongodb.tracking.store.uuid4", lambda: UUID(int=42))
+    experiment_repository.allocate_experiment_id.return_value = 42
     mongodb_store = MongoDBTrackingStore(
         store_uri="mongodb://localhost:27017/mlflow",
         artifact_uri=ARTIFACT_URI,
@@ -38,7 +37,7 @@ def store(monkeypatch, experiment_repository):
 def experiment_record_factory():
     def factory(
         *,
-        experiment_id=EXPERIMENT_ID,
+        experiment_id=42,
         name="example-experiment",
         artifact_location=f"{ARTIFACT_URI}/{EXPERIMENT_ID}",
         lifecycle_stage=LifecycleStage.ACTIVE,
