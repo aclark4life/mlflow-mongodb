@@ -26,8 +26,10 @@ from mlflow.utils.validation import (
 )
 from pymongo import MongoClient
 from pymongo.database import Database
+from pymongo.driver_info import DriverInfo
 from pymongo.errors import ConfigurationError
 
+from mlflow_mongodb._version import __version__
 from mlflow_mongodb.infrastructure.errors import (
     RepositoryAlreadyExistsError,
     RepositoryInvalidAttributeError,
@@ -66,7 +68,9 @@ class MongoDBTrackingStore(AbstractStore):
                 "A MongoDB tracking URI is required.", error_code=INVALID_PARAMETER_VALUE
             )
         try:
-            return MongoClient(self.store_uri)
+            return MongoClient(
+                self.store_uri, driver=DriverInfo(name="mlflow", version=__version__)
+            )
         except ConfigurationError as exc:
             logger.error("Unable to create MongoDB tracking client: %s", exc)
             raise MlflowException(
